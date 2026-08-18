@@ -1,0 +1,10 @@
+telajulio.duckdns.org {
+	@lista path /api/paths
+	handle @lista {
+		rewrite * /v3/paths/list
+		reverse_proxy localhost:9997
+	}
+	handle {
+		reverse_proxy localhost:8889
+	}
+}

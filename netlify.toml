@@ -1,0 +1,8 @@
+# Publica a raiz direto: index.html ja e o app.
+[build]
+  publish = "."
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Permissions-Policy = "display-capture=(self)"
