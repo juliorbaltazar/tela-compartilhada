@@ -161,10 +161,14 @@ const $=s=>document.querySelector(s);
 // como o app fica no GitHub Pages, apontamos explicitamente.
 const SERVER="https://telajulio.duckdns.org";
 
+// O que decide a nitidez é bits por pixel: bitrate ÷ (largura × altura × fps).
+// A 6 Mbps, 1080p60 dá 0,05 bpp — pouco pra jogo em movimento. Os mesmos bits
+// em 1080p30 dobram isso; em 720p60 mais que dobram. Daí os modos "nítida".
 const QUALITY={
-  leve:  {label:"Leve (720p·60)",      w:1280,h:720, fps:60, bitrate:2_500_000},
-  alta:  {label:"Alta (1080p·60)",     w:1920,h:1080,fps:60, bitrate:6_000_000},
-  ultra: {label:"Máxima (1080p·60 HQ)",w:1920,h:1080,fps:60, bitrate:9_000_000}
+  nitida:{label:"Nítida — 1080p·30",       w:1920,h:1080,fps:30, bitrate:10_000_000, sharp:true},
+  fluida:{label:"Fluida — 720p·60",        w:1280,h:720, fps:60, bitrate:8_000_000,  sharp:true},
+  cheia: {label:"Cheia — 1080p·60",        w:1920,h:1080,fps:60, bitrate:16_000_000, sharp:false},
+  leve:  {label:"Leve — 720p·30",          w:1280,h:720, fps:30, bitrate:4_000_000,  sharp:true}
 };
 
 let myName=null, myPath=null;
@@ -180,9 +184,9 @@ const store={get:(k,d)=>{try{return localStorage.getItem("tc_"+k)??d}catch(e){re
              set:(k,v)=>{try{localStorage.setItem("tc_"+k,v)}catch(e){}}};
 
 $("#qualitySel").innerHTML=Object.entries(QUALITY).map(([k,q])=>`<option value="${k}">${q.label}</option>`).join("");
-$("#qualitySel").value=store.get("quality","alta");
+$("#qualitySel").value=store.get("quality","nitida");
 $("#nameInput").value=store.get("name","");
-const quality=()=>QUALITY[$("#qualitySel").value]||QUALITY.alta;
+const quality=()=>QUALITY[$("#qualitySel").value]||QUALITY.nitida;
 
 // nome vira caminho no servidor: só letras, números e hífen
 const toPath=n=>n.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"")
@@ -244,7 +248,7 @@ function preferH264(pc){
 // conexão navegador-a-navegador, então ele ficava travado em ~2 Mbps.
 // Estes parâmetros dão um piso e um ponto de partida altos.
 function boostBitrate(sdp,kbps){
-  const min=Math.round(kbps*0.5), start=Math.round(kbps*0.8);
+  const min=Math.round(kbps*0.85), start=kbps;
   return sdp.replace(/^a=fmtp:(\d+) (.+)$/gm,(line,pt,params)=>{
     if(/x-google-start-bitrate/.test(params)) return line;
     // só nos codecs de vídeo (têm profile-level-id ou profile-id)
@@ -294,7 +298,7 @@ function applyBitrate(pc){
     const p=s.getParameters();
     if(!p.encodings?.length) p.encodings=[{}];
     if(s.track.kind==="video"){
-      p.degradationPreference="maintain-framerate";
+      p.degradationPreference=q.sharp?"maintain-resolution":"maintain-framerate";
       p.encodings[0].maxBitrate=q.bitrate;
       p.encodings[0].maxFramerate=q.fps;
     }else p.encodings[0].maxBitrate=96_000;
@@ -468,7 +472,7 @@ async function startShare(){
   }catch(e){ toast("Captura cancelada."); return; }
 
   const track=myStream.getVideoTracks()[0];
-  if("contentHint" in track) track.contentHint="motion";
+  if("contentHint" in track) track.contentHint=q.sharp?"detail":"motion";
   track.addEventListener("ended",stopShare);
   try{ await track.applyConstraints({width:{max:q.w},height:{max:q.h},frameRate:{max:q.fps}}); }catch(e){}
 
