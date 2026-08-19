@@ -160,6 +160,7 @@
     <div class="room">🖥️ Tela Compartilhada</div>
     <div class="spacer"></div>
     <select id="qualitySel" class="qualitySel" title="Qualidade da sua transmissão"></select>
+    <select id="codecSel" class="qualitySel" title="Codec de vídeo"></select>
     <button class="obsBtn" id="obsBtn">📺 transmitir pelo OBS</button>
     <button class="linkBtn" id="copyLinkBtn">copiar link</button>
     <button class="shareBtn" id="shareBtn">🖥️ compartilhar tela</button>
@@ -234,6 +235,12 @@ const store={get:(k,d)=>{try{return localStorage.getItem("tc_"+k)??d}catch(e){re
              set:(k,v)=>{try{localStorage.setItem("tc_"+k,v)}catch(e){}}};
 
 $("#qualitySel").innerHTML=Object.entries(QUALITY).map(([k,q])=>`<option value="${k}">${q.label}</option>`).join("");
+$("#codecSel").innerHTML=[
+  ["auto","Codec: automático"],
+  ["H264","Codec: H.264"],
+  ["VP8","Codec: VP8"]
+].map(([v,l])=>`<option value="${v}">${l}</option>`).join("");
+$("#codecSel").value=store.get("codec","auto");
 $("#qualitySel").value=store.get("quality","nitida");
 $("#nameInput").value=store.get("name","");
 const quality=()=>QUALITY[$("#qualitySel").value]||QUALITY.nitida;
@@ -278,17 +285,21 @@ function waitIce(pc){
   });
 }
 
-// H.264 primeiro: usa o encoder de hardware da GPU em vez de queimar CPU do jogo
-function preferH264(pc){
+// H.264 costuma pegar o encoder de hardware da GPU. Quando não pega, o
+// fallback do Chrome é o OpenH264, que gasta mais CPU e entrega qualidade
+// pior que o VP8 na mesma taxa — daí a opção de forçar VP8.
+function preferCodec(pc){
+  const escolha=$("#codecSel").value||"auto";
   const caps=RTCRtpSender.getCapabilities?.("video");
   if(!caps?.codecs) return;
-  const h264=caps.codecs.filter(c=>/h264/i.test(c.mimeType))
+  const alvo=escolha==="VP8"?/vp8/i:/h264/i;    // "auto" mira H.264 primeiro
+  const pref=caps.codecs.filter(c=>alvo.test(c.mimeType))
     .sort((a,b)=>(/packetization-mode=1/.test(b.sdpFmtpLine||"")?1:0)-(/packetization-mode=1/.test(a.sdpFmtpLine||"")?1:0));
-  if(!h264.length) return;
-  const rest=caps.codecs.filter(c=>!/h264/i.test(c.mimeType));
+  if(!pref.length) return;
+  const resto=caps.codecs.filter(c=>!alvo.test(c.mimeType));
   pc.getTransceivers().forEach(t=>{
     if(t.sender?.track?.kind==="video"&&t.setCodecPreferences){
-      try{t.setCodecPreferences([...h264,...rest])}catch(e){}
+      try{t.setCodecPreferences([...pref,...resto])}catch(e){}
     }
   });
 }
@@ -316,7 +327,7 @@ async function sdpExchange(url,offerSdp){
 async function whipPublish(stream,path){
   const pc=newPC();
   stream.getTracks().forEach(t=>pc.addTransceiver(t,{direction:"sendonly"}));
-  preferH264(pc);
+  preferCodec(pc);
   await pc.setLocalDescription(await pc.createOffer());
   await waitIce(pc);
   const sdp=boostBitrate(pc.localDescription.sdp, Math.round(quality().bitrate/1000));
@@ -584,6 +595,11 @@ function stopShare(){
 }
 
 $("#shareBtn").onclick=()=>myStream?stopShare():startShare();
+$("#codecSel").onchange=()=>{
+  store.set("codec",$("#codecSel").value);
+  toast(myStream ? "Pare e recomece a transmissão pra trocar o codec."
+                 : "Codec salvo.");
+};
 $("#qualitySel").onchange=()=>{
   store.set("quality",$("#qualitySel").value);
   if(pubPC){applyBitrate(pubPC);toast("Qualidade ajustada.")}
@@ -679,8 +695,9 @@ function renderHud(){
     if(sendStats.impl){
       const nm=sendStats.impl.replace(/SimulcastEncoderAdapter \((.*)\)/,"$1").split(",")[0].trim();
       const hw=isHW(sendStats.impl);
+      const dica=$("#codecSel").value!=="VP8" ? " — experimente VP8" : "";
       p.push(hw===true?`<span class="ok">encoder <b>${nm}</b> · hardware ✓</span>`
-           : hw===false?`<span class="warn">encoder <b>${nm}</b> · software</span>`
+           : hw===false?`<span class="warn">encoder <b>${nm}</b> · software${dica}</span>`
            : `<span>encoder <b>${nm}</b></span>`);
     }
     if(sendStats.limit==="cpu")p.push(`<span class="bad">CPU apertada — baixando sozinho se continuar</span>`);
