@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Diagnóstico de Encoder</title>
+<style>
+  :root{--bg:#0e141b;--panel:#161e28;--line:#293544;--txt:#e7edf4;--dim:#8592a3;
+        --go:#37d284;--gold:#f6c945;--hot:#ff6b5e}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);padding:22px;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  h1{font-size:19px;margin:0 0 6px}
+  .sub{color:var(--dim);font-size:13px;margin-bottom:18px;max-width:640px;line-height:1.5}
+  button{background:var(--go);border:none;color:#08130c;font-weight:800;border-radius:9px;
+    padding:12px 18px;font-size:14px;cursor:pointer;font-family:inherit}
+  button:disabled{opacity:.5}
+  table{border-collapse:collapse;margin:16px 0;font-size:13px;width:100%;max-width:680px}
+  th,td{text-align:left;padding:7px 12px;border-bottom:1px solid var(--line)}
+  th{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+  td.v{font-family:ui-monospace,Menlo,monospace;font-size:12.5px}
+  .ok{color:var(--go);font-weight:700}.bad{color:var(--hot);font-weight:700}.warn{color:var(--gold);font-weight:700}
+  #res{margin-top:14px}
+  .box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-top:14px;max-width:680px}
+  .box h2{font-size:13px;margin:0 0 10px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+  #copiar{background:var(--panel);border:1px solid var(--line);color:var(--dim);margin-left:10px}
+</style>
+</head>
+<body>
+<h1>🔬 Diagnóstico de Encoder</h1>
+<div class="sub">
+  Mede o que <b>este navegador nesta máquina</b> consegue de verdade: quais codecs têm
+  encoder de hardware, o que a captura de tela entrega, e qual encoder o WebRTC escolhe.
+  Clique, escolha uma tela qualquer e aguarde ~15 segundos.
+</div>
+<button id="go">rodar diagnóstico</button>
+<button id="copiar" hidden>copiar resultado</button>
+<div id="res"></div>
+
+<script>
+const $=s=>document.querySelector(s);
+const out=[];
+function box(title,rowsHtml){
+  const d=document.createElement("div"); d.className="box";
+  d.innerHTML=`<h2>${title}</h2>${rowsHtml}`;
+  $("#res").appendChild(d);
+}
+function mark(v){return v==="hardware"?`<span class="ok">hardware ✓</span>`
+  : v==="software"?`<span class="warn">software</span>`
+  : v===true?`<span class="ok">sim</span>`
+  : v===false?`<span class="bad">não</span>`
+  : `<span class="v">${v}</span>`;}
+
+$("#go").onclick=async()=>{
+  $("#go").disabled=true; $("#res").innerHTML=""; out.length=0;
+  out.push("UA: "+navigator.userAgent);
+
+  /* ---- 1. WebCodecs: quem tem hardware? ---- */
+  const codecs=[
+    ["H.264","avc1.42E01F"],
+    ["H.264 High","avc1.64002A"],
+    ["HEVC","hvc1.1.6.L123.00"],
+    ["VP8","vp8"],
+    ["VP9","vp09.00.10.08"],
+    ["AV1","av01.0.08M.08"]
+  ];
+  let rows="<table><tr><th>codec</th><th>hardware</th><th>software</th></tr>";
+  const hwOK=[];
+  if("VideoEncoder" in window){
+    for(const [nome,c] of codecs){
+      const base={codec:c,width:1920,height:1080,framerate:60,bitrate:8_000_000};
+      let hw="?",sw="?";
+      try{ hw=(await VideoEncoder.isConfigSupported({...base,hardwareAcceleration:"prefer-hardware"})).supported; }catch(e){ hw=false; }
+      try{ sw=(await VideoEncoder.isConfigSupported({...base,hardwareAcceleration:"prefer-software"})).supported; }catch(e){ sw=false; }
+      if(hw===true) hwOK.push(nome);
+      rows+=`<tr><td>${nome}</td><td>${mark(hw)}</td><td>${mark(sw)}</td></tr>`;
+      out.push(`webcodecs ${nome}: hw=${hw} sw=${sw}`);
+    }
+  }else{
+    rows+=`<tr><td colspan=3>WebCodecs indisponível neste navegador</td></tr>`;
+    out.push("webcodecs: indisponivel");
+  }
+  rows+="</table>";
+  box("1 · WebCodecs — encoders de hardware em 1080p60",rows);
+
+  /* ---- 2. captura: o que o sistema entrega ---- */
+  let stream=null, track=null, set={};
+  try{
+    stream=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:{max:60}},audio:false});
+    track=stream.getVideoTracks()[0]; set=track.getSettings();
+    const dpr=devicePixelRatio;
+    box("2 · Captura de tela",`<table>
+      <tr><th>resolução capturada</th><td class="v">${set.width}×${set.height}</td></tr>
+      <tr><th>fps</th><td class="v">${set.frameRate||"?"}</td></tr>
+      <tr><th>devicePixelRatio</th><td class="v">${dpr}</td></tr>
+      <tr><th>custo p/ 1080p</th><td>${set.width>2200?`<span class="warn">captura ${(set.width*set.height/(1920*1080)).toFixed(1)}× maior que o envio — redimensionamento por quadro</span>`:`<span class="ok">ok, próximo do envio</span>`}</td></tr>
+    </table>`);
+    out.push(`captura: ${set.width}x${set.height}@${set.frameRate} dpr=${dpr}`);
+  }catch(e){
+    box("2 · Captura de tela",`<span class="bad">cancelada (${e.name})</span> — partes 3 e 4 puladas`);
+    out.push("captura: cancelada");
+  }
+
+  /* ---- 3. encode real com WebCodecs prefer-hardware ---- */
+  if(track && "VideoEncoder" in window && hwOK.length){
+    try{
+      const cfgCodec = hwOK.includes("H.264") ? "avc1.42E01F"
+                     : hwOK.includes("HEVC") ? "hvc1.1.6.L123.00"
+                     : hwOK.includes("VP9") ? "vp09.00.10.08" : null;
+      if(cfgCodec){
+        const proc=new MediaStreamTrackProcessor({track});
+        const reader=proc.readable.getReader();
+        let frames=0, t0=0, sum=0, impl="";
+        const enc=new VideoEncoder({
+          output:()=>{ if(t0) sum+=performance.now()-t0; frames++; },
+          error:e=>out.push("encoder err: "+e.message)
+        });
+        enc.configure({codec:cfgCodec,width:set.width,height:set.height,
+          framerate:30,bitrate:8_000_000,hardwareAcceleration:"prefer-hardware",
+          latencyMode:"realtime"});
+        const fim=performance.now()+5000;
+        while(performance.now()<fim){
+          const {value,done}=await reader.read(); if(done)break;
+          if(enc.encodeQueueSize<3){ t0=performance.now(); enc.encode(value); }
+          value.close();
+        }
+        await enc.flush(); enc.close(); reader.releaseLock();
+        const mspf=frames?(sum/frames):0;
+        box("3 · Encode real da SUA tela (hardware, 5s)",`<table>
+          <tr><th>codec usado</th><td class="v">${cfgCodec}</td></tr>
+          <tr><th>quadros codificados</th><td class="v">${frames}</td></tr>
+          <tr><th>tempo médio por quadro</th><td>${mspf?`<span class="${mspf<8?"ok":mspf<20?"warn":"bad"}">${mspf.toFixed(1)} ms</span> ${mspf<8?"— folga pra 60fps":mspf<20?"— dá 30fps":"— apertado"}`:"?"}</td></tr>
+        </table>`);
+        out.push(`encode-hw: ${cfgCodec} frames=${frames} ms/frame=${mspf.toFixed(1)}`);
+      }
+    }catch(e){
+      box("3 · Encode real","<span class='bad'>falhou:</span> "+e.message);
+      out.push("encode-hw: falhou "+e.message);
+    }
+  }else if(track){
+    box("3 · Encode real","pulado — nenhum encoder de hardware disponível no passo 1");
+  }
+
+  /* ---- 4. o que o WebRTC clássico escolhe ---- */
+  if(track){
+    try{
+      const a=new RTCPeerConnection(),b=new RTCPeerConnection();
+      a.onicecandidate=e=>e.candidate&&b.addIceCandidate(e.candidate).catch(()=>{});
+      b.onicecandidate=e=>e.candidate&&a.addIceCandidate(e.candidate).catch(()=>{});
+      a.addTrack(track,stream);
+      await a.setLocalDescription(await a.createOffer());
+      await b.setRemoteDescription(a.localDescription);
+      await b.setLocalDescription(await b.createAnswer());
+      await a.setRemoteDescription(b.localDescription);
+      await new Promise(r=>setTimeout(r,4000));
+      let impl="?",pe;
+      (await a.getStats()).forEach(v=>{ if(v.type==="outbound-rtp"&&v.kind==="video"){
+        impl=v.encoderImplementation||"?"; pe=v.powerEfficientEncoder; }});
+      a.close();b.close();
+      const hw=/nvenc|videotoolbox|mediafoundation|vaapi|external/i.test(impl)?"hardware"
+             :/libvpx|openh264|libaom/i.test(impl)?"software":"?";
+      box("4 · WebRTC clássico (o que o app usa hoje)",`<table>
+        <tr><th>encoder escolhido</th><td class="v">${impl}</td></tr>
+        <tr><th>tipo</th><td>${mark(hw)}</td></tr>
+        <tr><th>powerEfficient</th><td class="v">${pe}</td></tr>
+      </table>`);
+      out.push(`webrtc: impl=${impl} powerEfficient=${pe}`);
+    }catch(e){ out.push("webrtc: falhou "+e.message); }
+    track.stop();
+  }
+
+  const c=$("#copiar"); c.hidden=false;
+  c.onclick=async()=>{ try{ await navigator.clipboard.writeText(out.join("\n")); c.textContent="copiado ✓"; }catch(e){} };
+  $("#go").disabled=false; $("#go").textContent="rodar de novo";
+};
+</script>
+</body>
+</html>
