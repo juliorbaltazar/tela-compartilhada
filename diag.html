@@ -104,9 +104,11 @@ $("#go").onclick=async()=>{
   /* ---- 3. encode real com WebCodecs prefer-hardware ---- */
   if(track && "VideoEncoder" in window && hwOK.length){
     try{
-      const cfgCodec = hwOK.includes("H.264") ? "avc1.42E01F"
-                     : hwOK.includes("HEVC") ? "hvc1.1.6.L123.00"
-                     : hwOK.includes("VP9") ? "vp09.00.10.08" : null;
+      // NVENC costuma expor só o perfil High — casar por prefixo, não por igualdade
+      const cfgCodec = hwOK.some(n=>n==="H.264") ? "avc1.42E01F"
+                     : hwOK.some(n=>n.startsWith("H.264")) ? "avc1.64002A"
+                     : hwOK.some(n=>n==="HEVC") ? "hvc1.1.6.L123.00"
+                     : hwOK.some(n=>n==="VP9") ? "vp09.00.10.08" : null;
       if(cfgCodec){
         const proc=new MediaStreamTrackProcessor({track});
         const reader=proc.readable.getReader();

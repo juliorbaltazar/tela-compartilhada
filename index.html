@@ -238,6 +238,7 @@ const store={get:(k,d)=>{try{return localStorage.getItem("tc_"+k)??d}catch(e){re
 $("#qualitySel").innerHTML=Object.entries(QUALITY).map(([k,q])=>`<option value="${k}">${q.label}</option>`).join("");
 $("#codecSel").innerHTML=[
   ["auto","Codec: automático"],
+  ["TURBO","Codec: H.264 turbo (GPU) 🚀"],
   ["H264","Codec: H.264"],
   ["VP8","Codec: VP8"]
 ].map(([v,l])=>`<option value="${v}">${l}</option>`).join("");
@@ -293,7 +294,7 @@ function preferCodec(pc){
   const escolha=$("#codecSel").value||"auto";
   const caps=RTCRtpSender.getCapabilities?.("video");
   if(!caps?.codecs) return;
-  const alvo=escolha==="VP8"?/vp8/i:/h264/i;    // "auto" mira H.264 primeiro
+  const alvo=escolha==="VP8"?/vp8/i:/h264/i;    // "auto" e "TURBO" miram H.264
   const pref=caps.codecs.filter(c=>alvo.test(c.mimeType))
     .sort((a,b)=>(/packetization-mode=1/.test(b.sdpFmtpLine||"")?1:0)-(/packetization-mode=1/.test(a.sdpFmtpLine||"")?1:0));
   if(!pref.length) return;
@@ -557,6 +558,34 @@ function render(){
   Object.values(old).forEach(e=>e.remove());
 }
 
+/* ---------- turbo: canvas relay ---------- */
+let rawStream=null, turboStop=null;
+
+async function turboRelay(stream,q){
+  const src=stream.getVideoTracks()[0];
+  const v=document.createElement("video");
+  v.muted=true; v.playsInline=true; v.srcObject=new MediaStream([src]);
+  await v.play();
+  const st=src.getSettings();
+  const cv=document.createElement("canvas");
+  cv.width=Math.min(st.width||q.w, q.w);
+  cv.height=Math.min(st.height||q.h, q.h);
+  const ctx=cv.getContext("2d",{alpha:false,desynchronized:true});
+  const out=cv.captureStream(0);          // 0 = quadro só quando requestFrame()
+  const ot=out.getVideoTracks()[0];
+  let vivo=true;
+  const passo=()=>{
+    if(!vivo || src.readyState==="ended") return;
+    ctx.drawImage(v,0,0,cv.width,cv.height);
+    ot.requestFrame?.();
+    v.requestVideoFrameCallback ? v.requestVideoFrameCallback(passo)
+                                : requestAnimationFrame(passo);
+  };
+  v.requestVideoFrameCallback ? v.requestVideoFrameCallback(passo)
+                              : requestAnimationFrame(passo);
+  return { track:ot, stop:()=>{ vivo=false; try{v.srcObject=null}catch(e){} } };
+}
+
 /* ---------- transmitir ---------- */
 async function startShare(){
   const q=quality();
@@ -569,10 +598,21 @@ async function startShare(){
     });
   }catch(e){ toast("Captura cancelada."); return; }
 
-  const track=myStream.getVideoTracks()[0];
-  if("contentHint" in track) track.contentHint="motion";
-  track.addEventListener("ended",stopShare);
+  let track=myStream.getVideoTracks()[0];
+  track.addEventListener("ended",stopShare);   // parar pela barra do navegador
   try{ await track.applyConstraints({width:{max:q.w},height:{max:q.h},frameRate:{max:q.fps}}); }catch(e){}
+
+  if($("#codecSel").value==="TURBO"){
+    try{
+      rawStream=myStream;
+      const t=await turboRelay(rawStream,q);
+      turboStop=t.stop;
+      myStream=new MediaStream([t.track, ...rawStream.getAudioTracks()]);
+      track=t.track;
+      toast("Turbo: codificando pela GPU 🚀");
+    }catch(e){ toast("Turbo falhou ("+e.message+") — seguindo no modo normal."); }
+  }
+  if("contentHint" in track) try{ track.contentHint="motion"; }catch(e){}
 
   try{
     pubPC=await whipPublish(myStream,myPath);
@@ -588,6 +628,8 @@ async function startShare(){
 
 function stopShare(){
   if(!myStream) return;
+  try{ turboStop?.(); }catch(e){} turboStop=null;
+  try{ rawStream?.getTracks().forEach(t=>t.stop()); }catch(e){} rawStream=null;
   myStream.getTracks().forEach(t=>t.stop());
   try{pubPC?.close()}catch(e){}
   pubPC=null; myStream=null;
