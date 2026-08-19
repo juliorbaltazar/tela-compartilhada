@@ -5,7 +5,7 @@
 # segredo (o repositório é público), mas não têm por que estar lá.
 
 [build]
-  command = "mkdir -p dist && cp index.html p2p.html diag.html dist/"
+  command = "mkdir -p dist && cp index.html p2p.html diag.html tela-app.bat dist/"
   publish = "dist"
 
 [[headers]]
